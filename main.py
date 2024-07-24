@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, colorchooser
 from PIL import Image, ImageTk, ImageDraw
-import cv2
 import numpy as np
 
 class AnnotationTool:
@@ -102,7 +101,7 @@ class AnnotationTool:
 
         scale = min(canvas_width / img_width, canvas_height / img_height)
         new_size = (int(img_width * scale), int(img_height * scale))
-        resized_image = self.image.resize(new_size, Image.ANTIALIAS)
+        resized_image = self.image.resize(new_size, Image.LANCZOS)
 
         self.tk_image = ImageTk.PhotoImage(resized_image)
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
