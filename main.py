@@ -44,6 +44,7 @@ class AnnotationTool:
         self.rect_color = "red"
         self.freehand_color = "blue"
         self.scale = 1.0
+        self.freehand_mode = False  # Initialize freehand_mode attribute
 
         self.undo_stack = []
         self.redo_stack = []
@@ -239,7 +240,7 @@ class AnnotationTool:
             draw.text((x, y - 10), label, fill=self.font_color)
 
         file_path = filedialog.asksaveasfilename(defaultextension=".png",
-                                               filetypes=[("PNG files", "*.png"), ("JPEG files", "*.jpg")])
+                                                 filetypes=[("PNG files", "*.png"), ("JPEG files", "*.jpg")])
         if not file_path:
             return
         annotated_image.save(file_path)
