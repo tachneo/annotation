@@ -1,21 +1,24 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, colorchooser
 from PIL import Image, ImageTk, ImageDraw
-import numpy as np
 
 class AnnotationTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Image Annotation Tool")
 
+        # Create main frame
+        self.main_frame = tk.Frame(root)
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+
         # Create canvas and scrollbars
-        self.canvas = tk.Canvas(root, bg="white")
+        self.canvas = tk.Canvas(self.main_frame, bg="white")
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.scroll_x = tk.Scrollbar(root, orient="horizontal", command=self.canvas.xview)
+        self.scroll_x = tk.Scrollbar(self.main_frame, orient="horizontal", command=self.canvas.xview)
         self.scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
 
-        self.scroll_y = tk.Scrollbar(root, orient="vertical", command=self.canvas.yview)
+        self.scroll_y = tk.Scrollbar(self.main_frame, orient="vertical", command=self.canvas.yview)
         self.scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.canvas.configure(xscrollcommand=self.scroll_x.set, yscrollcommand=self.scroll_y.set)
@@ -55,43 +58,39 @@ class AnnotationTool:
         self.file_menu.add_command(label="Save Image", command=self.save_image)
         self.file_menu.add_command(label="Exit", command=root.quit)
 
+        # Tool frame
+        self.tool_frame = tk.Frame(self.main_frame, padx=5, pady=5)
+        self.tool_frame.pack(side=tk.RIGHT, fill=tk.Y)
+
         # Color selection buttons
-        self.color_frame = tk.Frame(root)
-        self.color_frame.pack(side=tk.BOTTOM, pady=5)
-        self.font_color_button = tk.Button(self.color_frame, text="Font Color", command=self.choose_font_color)
-        self.font_color_button.pack(side=tk.LEFT, padx=5)
-        self.rect_color_button = tk.Button(self.color_frame, text="Rect Color", command=self.choose_rect_color)
-        self.rect_color_button.pack(side=tk.LEFT, padx=5)
-        self.freehand_color_button = tk.Button(self.color_frame, text="Freehand Color", command=self.choose_freehand_color)
-        self.freehand_color_button.pack(side=tk.LEFT, padx=5)
+        self.font_color_button = tk.Button(self.tool_frame, text="Font Color", command=self.choose_font_color)
+        self.font_color_button.pack(fill=tk.X, pady=2)
+        self.rect_color_button = tk.Button(self.tool_frame, text="Rect Color", command=self.choose_rect_color)
+        self.rect_color_button.pack(fill=tk.X, pady=2)
+        self.freehand_color_button = tk.Button(self.tool_frame, text="Freehand Color", command=self.choose_freehand_color)
+        self.freehand_color_button.pack(fill=tk.X, pady=2)
 
         # Label entry and add button
-        self.label_entry = tk.Entry(root, width=20)
-        self.label_entry.pack(side=tk.BOTTOM, pady=5)
-        self.label_button = tk.Button(root, text="Add Label", command=self.add_label)
-        self.label_button.pack(side=tk.BOTTOM, pady=5)
+        self.label_entry = tk.Entry(self.tool_frame, width=20)
+        self.label_entry.pack(fill=tk.X, pady=2)
+        self.label_button = tk.Button(self.tool_frame, text="Add Label", command=self.add_label)
+        self.label_button.pack(fill=tk.X, pady=2)
 
         # Toggle for freehand drawing
-        self.freehand_mode = False
-        self.freehand_button = tk.Button(root, text="Toggle Freehand Mode", command=self.toggle_freehand_mode)
-        self.freehand_button.pack(side=tk.BOTTOM, pady=5)
-
-        # Store freehand drawings separately
-        self.freehand_drawings = []
+        self.freehand_button = tk.Button(self.tool_frame, text="Toggle Freehand Mode", command=self.toggle_freehand_mode)
+        self.freehand_button.pack(fill=tk.X, pady=2)
 
         # Zoom controls
-        self.zoom_in_button = tk.Button(root, text="Zoom In", command=self.zoom_in)
-        self.zoom_in_button.pack(side=tk.BOTTOM, pady=5)
-
-        self.zoom_out_button = tk.Button(root, text="Zoom Out", command=self.zoom_out)
-        self.zoom_out_button.pack(side=tk.BOTTOM, pady=5)
+        self.zoom_in_button = tk.Button(self.tool_frame, text="Zoom In", command=self.zoom_in)
+        self.zoom_in_button.pack(fill=tk.X, pady=2)
+        self.zoom_out_button = tk.Button(self.tool_frame, text="Zoom Out", command=self.zoom_out)
+        self.zoom_out_button.pack(fill=tk.X, pady=2)
 
         # Rotation controls
-        self.rotate_left_button = tk.Button(root, text="Rotate Left", command=self.rotate_left)
-        self.rotate_left_button.pack(side=tk.BOTTOM, pady=5)
-
-        self.rotate_right_button = tk.Button(root, text="Rotate Right", command=self.rotate_right)
-        self.rotate_right_button.pack(side=tk.BOTTOM, pady=5)
+        self.rotate_left_button = tk.Button(self.tool_frame, text="Rotate Left", command=self.rotate_left)
+        self.rotate_left_button.pack(fill=tk.X, pady=2)
+        self.rotate_right_button = tk.Button(self.tool_frame, text="Rotate Right", command=self.rotate_right)
+        self.rotate_right_button.pack(fill=tk.X, pady=2)
 
         # Bindings for undo and redo
         self.root.bind("<Control-z>", self.undo)
@@ -124,7 +123,9 @@ class AnnotationTool:
     def display_image(self, scale):
         resized_image = self.image.resize((int(self.image.width * scale), int(self.image.height * scale)), Image.LANCZOS)
         self.tk_image = ImageTk.PhotoImage(resized_image)
+        self.canvas.delete("image")
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image, tags="image")
+        self.canvas.tag_lower("image")  # Ensure the image is at the bottom layer
         self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
 
     def on_click(self, event):
