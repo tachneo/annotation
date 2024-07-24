@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, colorchooser
 from PIL import Image, ImageTk, ImageDraw
-import cv2
 import numpy as np
 
 class AnnotationTool:
@@ -58,7 +57,7 @@ class AnnotationTool:
         self.font_color_button = tk.Button(self.color_frame, text="Font Color", command=self.choose_font_color)
         self.font_color_button.pack(side=tk.LEFT, padx=5)
         self.rect_color_button = tk.Button(self.color_frame, text="Rect Color", command=self.choose_rect_color)
-        self.rect_color_button.pack(side=tk.LEFT, padx=5)
+        self.font_color_button.pack(side=tk.LEFT, padx=5)
         self.freehand_color_button = tk.Button(self.color_frame, text="Freehand Color", command=self.choose_freehand_color)
         self.freehand_color_button.pack(side=tk.LEFT, padx=5)
 
@@ -102,10 +101,10 @@ class AnnotationTool:
 
         scale = min(canvas_width / img_width, canvas_height / img_height)
         new_size = (int(img_width * scale), int(img_height * scale))
-        resized_image = self.image.resize(new_size, Image.ANTIALIAS)
+        resized_image = self.image.resize(new_size, Image.LANCZOS)
 
         self.tk_image = ImageTk.PhotoImage(resized_image)
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image, tags="image")
         self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
 
     def on_click(self, event):
@@ -116,7 +115,7 @@ class AnnotationTool:
         self.start_x = self.canvas.canvasx(event.x)
         self.start_y = self.canvas.canvasy(event.y)
         self.rect_id = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y,
-                                                   outline=self.rect_color)
+                                                   outline=self.rect_color, tags="annotation")
 
     def on_drag(self, event):
         if self.freehand_mode:
@@ -135,7 +134,7 @@ class AnnotationTool:
         else:
             cur_x = self.canvas.canvasx(event.x)
             cur_y = self.canvas.canvasy(event.y)
-            line_id = self.canvas.create_line(self.prev_x, self.prev_y, cur_x, cur_y, fill=self.freehand_color, width=2)
+            line_id = self.canvas.create_line(self.prev_x, self.prev_y, cur_x, cur_y, fill=self.freehand_color, width=2, tags="annotation")
             self.freehand_drawings.append(line_id)
             self.prev_x = cur_x
             self.prev_y = cur_y
@@ -149,7 +148,7 @@ class AnnotationTool:
             if label:
                 self.labels.append((self.rect_id, label))
                 self.label_entry.delete(0, tk.END)
-                self.canvas.create_text(self.start_x, self.start_y - 10, text=label, fill=self.font_color)
+                self.canvas.create_text(self.start_x, self.start_y - 10, text=label, fill=self.font_color, tags="annotation")
             else:
                 messagebox.showwarning("Warning", "Please enter a label.")
         elif self.freehand_mode:
@@ -160,7 +159,7 @@ class AnnotationTool:
                 self.label_entry.delete(0, tk.END)
                 # Create label for the last freehand drawing (simplified approach)
                 x, y = self.canvas.coords(self.freehand_drawings[-1])[0:2]
-                self.canvas.create_text(x, y - 10, text=label, fill=self.font_color)
+                self.canvas.create_text(x, y - 10, text=label, fill=self.font_color, tags="annotation")
             else:
                 messagebox.showwarning("Warning", "Please enter a label.")
 
@@ -196,7 +195,8 @@ class AnnotationTool:
             return
 
         # Draw annotations on the image
-        draw = ImageDraw.Draw(self.image)
+        annotated_image = self.original_image.copy()
+        draw = ImageDraw.Draw(annotated_image)
         for rect_id, label in self.labels:
             coords = self.canvas.coords(rect_id)
             draw.rectangle(coords, outline=self.rect_color, width=2)
@@ -213,7 +213,7 @@ class AnnotationTool:
                                                filetypes=[("PNG files", "*.png"), ("JPEG files", "*.jpg")])
         if not file_path:
             return
-        self.image.save(file_path)
+        annotated_image.save(file_path)
         messagebox.showinfo("Info", "Image saved with annotations.")
 
     def choose_font_color(self):
