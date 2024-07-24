@@ -110,6 +110,7 @@ class AnnotationTool:
         self.freehand_labels = []  # Clear previous freehand labels
         self.undo_stack.clear()
         self.redo_stack.clear()
+        self.save_canvas_state()
 
     def fit_image_to_canvas(self):
         canvas_width = self.canvas.winfo_width()
@@ -117,9 +118,11 @@ class AnnotationTool:
         img_width, img_height = self.image.size
 
         scale = min(canvas_width / img_width, canvas_height / img_height)
-        new_size = (int(img_width * scale), int(img_height * scale))
-        resized_image = self.image.resize(new_size, Image.LANCZOS)
+        self.scale = scale
+        self.display_image(scale)
 
+    def display_image(self, scale):
+        resized_image = self.image.resize((int(self.image.width * scale), int(self.image.height * scale)), Image.LANCZOS)
         self.tk_image = ImageTk.PhotoImage(resized_image)
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image, tags="image")
         self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
@@ -161,9 +164,9 @@ class AnnotationTool:
 
     def on_release(self, event):
         if self.freehand_mode and self.freehand_drawings:
-            self.push_undo()
+            self.save_canvas_state()
         elif self.rect_id:
-            self.push_undo()
+            self.save_canvas_state()
 
     def add_label(self):
         if not self.freehand_mode and self.rect_id:
@@ -172,7 +175,7 @@ class AnnotationTool:
                 self.labels.append((self.rect_id, label))
                 self.label_entry.delete(0, tk.END)
                 self.canvas.create_text(self.start_x, self.start_y - 10, text=label, fill=self.font_color, tags="annotation")
-                self.push_undo()
+                self.save_canvas_state()
             else:
                 messagebox.showwarning("Warning", "Please enter a label.")
         elif self.freehand_mode:
@@ -184,7 +187,7 @@ class AnnotationTool:
                 # Create label for the last freehand drawing (simplified approach)
                 x, y = self.canvas.coords(self.freehand_drawings[-1])[0:2]
                 self.canvas.create_text(x, y - 10, text=label, fill=self.font_color, tags="annotation")
-                self.push_undo()
+                self.save_canvas_state()
             else:
                 messagebox.showwarning("Warning", "Please enter a label.")
 
@@ -265,48 +268,75 @@ class AnnotationTool:
         if event.delta < 0:
             factor = 1 / factor
         self.scale *= factor
-        self.canvas.scale("all", event.x, event.y, factor, factor)
+        self.display_image(self.scale)
         self.canvas.configure(scrollregion=self.canvas.bbox(tk.ALL))
 
     def zoom_in(self):
         self.scale *= 1.1
-        self.canvas.scale("all", 0, 0, 1.1, 1.1)
+        self.display_image(self.scale)
         self.canvas.configure(scrollregion=self.canvas.bbox(tk.ALL))
 
     def zoom_out(self):
         self.scale /= 1.1
-        self.canvas.scale("all", 0, 0, 0.9, 0.9)
+        self.display_image(self.scale)
         self.canvas.configure(scrollregion=self.canvas.bbox(tk.ALL))
 
     def rotate_left(self):
         if self.image:
             self.image = self.image.rotate(90, expand=True)
             self.fit_image_to_canvas()
+            self.save_canvas_state()
 
     def rotate_right(self):
         if self.image:
             self.image = self.image.rotate(-90, expand=True)
             self.fit_image_to_canvas()
+            self.save_canvas_state()
 
-    def push_undo(self):
-        state = (self.canvas.find_withtag("annotation"),)
+    def save_canvas_state(self):
+        items = self.canvas.find_all()
+        state = []
+        for item in items:
+            item_type = self.canvas.type(item)
+            coords = self.canvas.coords(item)
+            tags = self.canvas.itemcget(item, "tags")
+            state_item = {"type": item_type, "coords": coords, "tags": tags}
+            if item_type == "rectangle" or item_type == "line":
+                state_item["outline"] = self.canvas.itemcget(item, "outline")
+                state_item["width"] = self.canvas.itemcget(item, "width")
+            if item_type == "text":
+                state_item["text"] = self.canvas.itemcget(item, "text")
+                state_item["fill"] = self.canvas.itemcget(item, "fill")
+            state.append(state_item)
         self.undo_stack.append(state)
         self.redo_stack.clear()
 
+    def load_canvas_state(self, state):
+        self.canvas.delete("all")
+        for item in state:
+            item_type = item["type"]
+            coords = item["coords"]
+            tags = item["tags"]
+            if item_type == "image":
+                self.canvas.create_image(coords, anchor=tk.NW, image=self.tk_image, tags=tags)
+            elif item_type == "rectangle":
+                self.canvas.create_rectangle(coords, outline=item["outline"], width=item["width"], tags=tags)
+            elif item_type == "line":
+                self.canvas.create_line(coords, fill=item["outline"], width=item["width"], tags=tags)
+            elif item_type == "text":
+                self.canvas.create_text(coords, text=item["text"], fill=item["fill"], tags=tags)
+
     def undo(self, event=None):
-        if self.undo_stack:
+        if len(self.undo_stack) > 1:
             state = self.undo_stack.pop()
             self.redo_stack.append(state)
-            self.canvas.delete("annotation")
-            for item in state:
-                self.canvas.addtag_withtag("annotation", item)
+            self.load_canvas_state(self.undo_stack[-1])
 
     def redo(self, event=None):
         if self.redo_stack:
             state = self.redo_stack.pop()
             self.undo_stack.append(state)
-            for item in state:
-                self.canvas.addtag_withtag("annotation", item)
+            self.load_canvas_state(state)
 
 if __name__ == "__main__":
     root = tk.Tk()
