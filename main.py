@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, colorchooser
 from PIL import Image, ImageTk, ImageDraw
-import cv2
 import numpy as np
 
 class AnnotationTool:
@@ -24,6 +23,7 @@ class AnnotationTool:
         self.canvas.bind("<Button-1>", self.on_click)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<B1-Motion>", self.on_freehand_draw, add="+")
+        self.canvas.bind("<ButtonRelease-1>", self.on_release)
         self.canvas.bind("<MouseWheel>", self.on_zoom)
 
         self.rect = None
@@ -41,6 +41,9 @@ class AnnotationTool:
         self.rect_color = "red"
         self.freehand_color = "blue"
         self.scale = 1.0
+
+        self.undo_stack = []
+        self.redo_stack = []
 
         # Create menus
         self.menubar = tk.Menu(root)
@@ -83,6 +86,17 @@ class AnnotationTool:
         self.zoom_out_button = tk.Button(root, text="Zoom Out", command=self.zoom_out)
         self.zoom_out_button.pack(side=tk.BOTTOM, pady=5)
 
+        # Rotation controls
+        self.rotate_left_button = tk.Button(root, text="Rotate Left", command=self.rotate_left)
+        self.rotate_left_button.pack(side=tk.BOTTOM, pady=5)
+
+        self.rotate_right_button = tk.Button(root, text="Rotate Right", command=self.rotate_right)
+        self.rotate_right_button.pack(side=tk.BOTTOM, pady=5)
+
+        # Bindings for undo and redo
+        self.root.bind("<Control-z>", self.undo)
+        self.root.bind("<Control-y>", self.redo)
+
     def open_image(self):
         file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg;*.jpeg;*.png")])
         if not file_path:
@@ -94,6 +108,8 @@ class AnnotationTool:
         self.labels = []
         self.freehand_drawings = []
         self.freehand_labels = []  # Clear previous freehand labels
+        self.undo_stack.clear()
+        self.redo_stack.clear()
 
     def fit_image_to_canvas(self):
         canvas_width = self.canvas.winfo_width()
@@ -102,10 +118,10 @@ class AnnotationTool:
 
         scale = min(canvas_width / img_width, canvas_height / img_height)
         new_size = (int(img_width * scale), int(img_height * scale))
-        resized_image = self.image.resize(new_size, Image.ANTIALIAS)
+        resized_image = self.image.resize(new_size, Image.LANCZOS)
 
         self.tk_image = ImageTk.PhotoImage(resized_image)
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image, tags="image")
         self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
 
     def on_click(self, event):
@@ -116,7 +132,7 @@ class AnnotationTool:
         self.start_x = self.canvas.canvasx(event.x)
         self.start_y = self.canvas.canvasy(event.y)
         self.rect_id = self.canvas.create_rectangle(self.start_x, self.start_y, self.start_x, self.start_y,
-                                                   outline=self.rect_color)
+                                                   outline=self.rect_color, tags="annotation")
 
     def on_drag(self, event):
         if self.freehand_mode:
@@ -135,7 +151,7 @@ class AnnotationTool:
         else:
             cur_x = self.canvas.canvasx(event.x)
             cur_y = self.canvas.canvasy(event.y)
-            line_id = self.canvas.create_line(self.prev_x, self.prev_y, cur_x, cur_y, fill=self.freehand_color, width=2)
+            line_id = self.canvas.create_line(self.prev_x, self.prev_y, cur_x, cur_y, fill=self.freehand_color, width=2, tags="annotation")
             self.freehand_drawings.append(line_id)
             self.prev_x = cur_x
             self.prev_y = cur_y
@@ -143,13 +159,20 @@ class AnnotationTool:
     def on_freehand_draw_release(self, event):
         self.drawing = False
 
+    def on_release(self, event):
+        if self.freehand_mode and self.freehand_drawings:
+            self.push_undo()
+        elif self.rect_id:
+            self.push_undo()
+
     def add_label(self):
         if not self.freehand_mode and self.rect_id:
             label = self.label_entry.get()
             if label:
                 self.labels.append((self.rect_id, label))
                 self.label_entry.delete(0, tk.END)
-                self.canvas.create_text(self.start_x, self.start_y - 10, text=label, fill=self.font_color)
+                self.canvas.create_text(self.start_x, self.start_y - 10, text=label, fill=self.font_color, tags="annotation")
+                self.push_undo()
             else:
                 messagebox.showwarning("Warning", "Please enter a label.")
         elif self.freehand_mode:
@@ -160,7 +183,8 @@ class AnnotationTool:
                 self.label_entry.delete(0, tk.END)
                 # Create label for the last freehand drawing (simplified approach)
                 x, y = self.canvas.coords(self.freehand_drawings[-1])[0:2]
-                self.canvas.create_text(x, y - 10, text=label, fill=self.font_color)
+                self.canvas.create_text(x, y - 10, text=label, fill=self.font_color, tags="annotation")
+                self.push_undo()
             else:
                 messagebox.showwarning("Warning", "Please enter a label.")
 
@@ -196,7 +220,8 @@ class AnnotationTool:
             return
 
         # Draw annotations on the image
-        draw = ImageDraw.Draw(self.image)
+        annotated_image = self.original_image.copy()
+        draw = ImageDraw.Draw(annotated_image)
         for rect_id, label in self.labels:
             coords = self.canvas.coords(rect_id)
             draw.rectangle(coords, outline=self.rect_color, width=2)
@@ -213,7 +238,7 @@ class AnnotationTool:
                                                filetypes=[("PNG files", "*.png"), ("JPEG files", "*.jpg")])
         if not file_path:
             return
-        self.image.save(file_path)
+        annotated_image.save(file_path)
         messagebox.showinfo("Info", "Image saved with annotations.")
 
     def choose_font_color(self):
@@ -252,6 +277,36 @@ class AnnotationTool:
         self.scale /= 1.1
         self.canvas.scale("all", 0, 0, 0.9, 0.9)
         self.canvas.configure(scrollregion=self.canvas.bbox(tk.ALL))
+
+    def rotate_left(self):
+        if self.image:
+            self.image = self.image.rotate(90, expand=True)
+            self.fit_image_to_canvas()
+
+    def rotate_right(self):
+        if self.image:
+            self.image = self.image.rotate(-90, expand=True)
+            self.fit_image_to_canvas()
+
+    def push_undo(self):
+        state = (self.canvas.find_withtag("annotation"),)
+        self.undo_stack.append(state)
+        self.redo_stack.clear()
+
+    def undo(self, event=None):
+        if self.undo_stack:
+            state = self.undo_stack.pop()
+            self.redo_stack.append(state)
+            self.canvas.delete("annotation")
+            for item in state:
+                self.canvas.addtag_withtag("annotation", item)
+
+    def redo(self, event=None):
+        if self.redo_stack:
+            state = self.redo_stack.pop()
+            self.undo_stack.append(state)
+            for item in state:
+                self.canvas.addtag_withtag("annotation", item)
 
 if __name__ == "__main__":
     root = tk.Tk()
