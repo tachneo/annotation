@@ -26,6 +26,9 @@ class AnnotationTool:
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
         self.canvas.bind("<MouseWheel>", self.on_zoom)
+        self.canvas.bind("<ButtonPress-3>", self.start_move_image)
+        self.canvas.bind("<B3-Motion>", self.move_image)
+        self.canvas.bind("<ButtonRelease-3>", self.end_move_image)
         self.root.bind("<Control-z>", self.undo)
         self.root.bind("<Control-y>", self.redo)
 
@@ -131,6 +134,11 @@ class AnnotationTool:
         self.annotation_listbox.pack(side=tk.TOP, fill=tk.Y, padx=5, pady=5)
         self.annotation_listbox.insert(tk.END, "Annotations:")
 
+        # Variables for moving the image
+        self.image_id = None
+        self.move_image_start_x = None
+        self.move_image_start_y = None
+
     def log_action(self, action):
         self.actions.append(action)
         self.redo_actions.clear()
@@ -210,13 +218,32 @@ class AnnotationTool:
             self.image = self.image.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
         self.tk_image = ImageTk.PhotoImage(self.image)
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+        if self.image_id:
+            self.canvas.delete(self.image_id)
+        self.image_id = self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
         self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
         self.rect = None
         self.labels = []
         self.freehand_drawings = []
         self.freehand_labels = []  # Clear previous freehand labels
         self.log_action("Opened image")
+
+    def start_move_image(self, event):
+        self.move_image_start_x = event.x
+        self.move_image_start_y = event.y
+
+    def move_image(self, event):
+        if not self.image_id:
+            return
+        dx = event.x - self.move_image_start_x
+        dy = event.y - self.move_image_start_y
+        self.canvas.move(self.image_id, dx, dy)
+        self.move_image_start_x = event.x
+        self.move_image_start_y = event.y
+
+    def end_move_image(self, event):
+        self.move_image_start_x = None
+        self.move_image_start_y = None
 
     def on_click(self, event):
         if self.freehand_mode:
