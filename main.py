@@ -189,6 +189,9 @@ class AnnotationTool:
         self.image = Image.open(file_path)
         self.original_image = self.image.copy()  # Keep a copy of the original image
 
+        self.fit_image_to_canvas()
+
+    def fit_image_to_canvas(self):
         # Get canvas dimensions
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
@@ -429,31 +432,7 @@ class AnnotationTool:
         self.image = Image.open(image_path)
         self.original_image = self.image.copy()  # Keep a copy of the original image
 
-        # Get canvas dimensions
-        canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
-
-        # Resize the image to fit within the canvas while maintaining the aspect ratio
-        image_width, image_height = self.image.size
-        aspect_ratio = image_width / image_height
-
-        if image_width > canvas_width or image_height > canvas_height:
-            if aspect_ratio > 1:
-                new_width = canvas_width
-                new_height = int(canvas_width / aspect_ratio)
-            else:
-                new_height = canvas_height
-                new_width = int(canvas_height * aspect_ratio)
-            self.image = self.image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-        self.tk_image = ImageTk.PhotoImage(self.image)
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
-        self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
-        self.rect = None
-        self.labels = []
-        self.freehand_drawings = []
-        self.freehand_labels = []  # Clear previous freehand labels
-        self.log_action("Opened image")
+        self.fit_image_to_canvas()
 
     def save_image(self):
         if not self.image:
@@ -502,9 +481,7 @@ class AnnotationTool:
             new_size = (int(self.image.width * 0.5), int(self.image.height * 0.5))
             self.image = self.image.resize(new_size, Image.Resampling.LANCZOS)
 
-        self.tk_image = ImageTk.PhotoImage(self.image)
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
-        self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
+        self.fit_image_to_canvas()
         self.log_action(f"Applied augmentation: {method}")
 
     def crop_image(self):
@@ -517,9 +494,7 @@ class AnnotationTool:
             try:
                 x1, y1, x2, y2 = map(int, crop_box.split(','))
                 self.image = self.image.crop((x1, y1, x2, y2))
-                self.tk_image = ImageTk.PhotoImage(self.image)
-                self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
-                self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
+                self.fit_image_to_canvas()
                 self.log_action(f"Cropped image with box ({x1}, {y1}, {x2}, {y2})")
             except ValueError:
                 messagebox.showwarning("Warning", "Invalid crop box format.")
@@ -534,9 +509,7 @@ class AnnotationTool:
             try:
                 width, height = map(int, new_size.split(','))
                 self.image = self.image.resize((width, height), Image.Resampling.LANCZOS)
-                self.tk_image = ImageTk.PhotoImage(self.image)
-                self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
-                self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
+                self.fit_image_to_canvas()
                 self.log_action(f"Resized image to ({width}, {height})")
             except ValueError:
                 messagebox.showwarning("Warning", "Invalid size format.")
