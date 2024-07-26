@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, colorchooser, simpledialog
 from PIL import Image, ImageTk, ImageDraw
 import json
+import os
+import threading
 
 class AnnotationTool:
     def __init__(self, root):
@@ -51,6 +53,11 @@ class AnnotationTool:
         self.redo_actions = []
         self.annotation_mode = "rectangle"  # Default annotation mode
 
+        # Autosave
+        self.autosave_interval = 300  # 5 minutes
+        self.autosave_path = "autosave.json"
+        self.start_autosave()
+
         # Create menus
         self.menubar = tk.Menu(root)
         self.root.config(menu=self.menubar)
@@ -71,6 +78,18 @@ class AnnotationTool:
         self.mode_menu.add_command(label="Polygon", command=lambda: self.set_annotation_mode("polygon"))
         self.mode_menu.add_command(label="Circle", command=lambda: self.set_annotation_mode("circle"))
         self.mode_menu.add_command(label="Keypoints", command=lambda: self.set_annotation_mode("keypoints"))
+
+        # Image preprocessing menu
+        self.preprocess_menu = tk.Menu(self.menubar, tearoff=0)
+        self.menubar.add_cascade(label="Preprocess", menu=self.preprocess_menu)
+        self.preprocess_menu.add_command(label="Rotate 90°", command=lambda: self.augment_image("rotate_90"))
+        self.preprocess_menu.add_command(label="Rotate 180°", command=lambda: self.augment_image("rotate_180"))
+        self.preprocess_menu.add_command(label="Flip Horizontal", command=lambda: self.augment_image("flip_horizontal"))
+        self.preprocess_menu.add_command(label="Flip Vertical", command=lambda: self.augment_image("flip_vertical"))
+        self.preprocess_menu.add_command(label="Scale 1.5x", command=lambda: self.augment_image("scale_1.5"))
+        self.preprocess_menu.add_command(label="Scale 0.5x", command=lambda: self.augment_image("scale_0.5"))
+        self.preprocess_menu.add_command(label="Crop", command=self.crop_image)
+        self.preprocess_menu.add_command(label="Resize", command=self.resize_image)
 
         # Color selection buttons
         self.color_frame = tk.Frame(root)
@@ -134,6 +153,33 @@ class AnnotationTool:
         self.action_listbox.insert(tk.END, f"Redo: {action}")
         # Implement specific redo logic based on action type
         # ...
+
+    def start_autosave(self):
+        self.autosave()
+        self.root.after(self.autosave_interval * 1000, self.start_autosave)
+
+    def autosave(self):
+        if not self.image:
+            return
+        project = {
+            "image": self.image_path,
+            "annotations": []
+        }
+        for rect_id, label in self.labels:
+            coords = self.canvas.coords(rect_id)
+            project["annotations"].append({
+                'label': label,
+                'bbox': (coords[0], coords[1], coords[2], coords[3])
+            })
+        for line_id, label in self.freehand_labels:
+            coords = self.canvas.coords(line_id)
+            project["annotations"].append({
+                'label': label,
+                'freehand': coords
+            })
+        with open(self.autosave_path, "w") as f:
+            json.dump(project, f, indent=4)
+        self.log_action("Autosaved project")
 
     def open_image(self):
         file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg;*.jpeg;*.png")])
@@ -435,6 +481,65 @@ class AnnotationTool:
         self.image.save(file_path)
         messagebox.showinfo("Info", "Image saved with annotations.")
         self.log_action("Saved image with annotations")
+
+    def augment_image(self, method):
+        if not self.image:
+            messagebox.showwarning("Warning", "No image to augment.")
+            return
+
+        if method == "rotate_90":
+            self.image = self.image.rotate(90, expand=True)
+        elif method == "rotate_180":
+            self.image = self.image.rotate(180, expand=True)
+        elif method == "flip_horizontal":
+            self.image = self.image.transpose(Image.FLIP_LEFT_RIGHT)
+        elif method == "flip_vertical":
+            self.image = self.image.transpose(Image.FLIP_TOP_BOTTOM)
+        elif method == "scale_1.5":
+            new_size = (int(self.image.width * 1.5), int(self.image.height * 1.5))
+            self.image = self.image.resize(new_size, Image.Resampling.LANCZOS)
+        elif method == "scale_0.5":
+            new_size = (int(self.image.width * 0.5), int(self.image.height * 0.5))
+            self.image = self.image.resize(new_size, Image.Resampling.LANCZOS)
+
+        self.tk_image = ImageTk.PhotoImage(self.image)
+        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+        self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
+        self.log_action(f"Applied augmentation: {method}")
+
+    def crop_image(self):
+        if not self.image:
+            messagebox.showwarning("Warning", "No image to crop.")
+            return
+
+        crop_box = simpledialog.askstring("Crop Image", "Enter crop box as 'x1,y1,x2,y2':")
+        if crop_box:
+            try:
+                x1, y1, x2, y2 = map(int, crop_box.split(','))
+                self.image = self.image.crop((x1, y1, x2, y2))
+                self.tk_image = ImageTk.PhotoImage(self.image)
+                self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+                self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
+                self.log_action(f"Cropped image with box ({x1}, {y1}, {x2}, {y2})")
+            except ValueError:
+                messagebox.showwarning("Warning", "Invalid crop box format.")
+
+    def resize_image(self):
+        if not self.image:
+            messagebox.showwarning("Warning", "No image to resize.")
+            return
+
+        new_size = simpledialog.askstring("Resize Image", "Enter new size as 'width,height':")
+        if new_size:
+            try:
+                width, height = map(int, new_size.split(','))
+                self.image = self.image.resize((width, height), Image.Resampling.LANCZOS)
+                self.tk_image = ImageTk.PhotoImage(self.image)
+                self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_image)
+                self.canvas.config(scrollregion=self.canvas.bbox(tk.ALL))
+                self.log_action(f"Resized image to ({width}, {height})")
+            except ValueError:
+                messagebox.showwarning("Warning", "Invalid size format.")
 
     def on_zoom(self, event):
         factor = 1.1
