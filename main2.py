@@ -1,6 +1,7 @@
 import tkinter as tk
+import cv2
 from tkinter import filedialog, simpledialog, messagebox, ttk
-from PIL import Image, ImageTk, ImageDraw
+from PIL import Image, ImageFilter, ImageOps, ImageEnhance, ImageTk, ImageDraw
 import os
 import json
 from lxml import etree
@@ -9,12 +10,13 @@ import yaml
 import subprocess
 from shutil import copy
 from pathlib import Path
-
+import numpy as np
+import random
 
 class YOLOv5Tool:
     def __init__(self, root):
         self.root = root
-        self.root.title("YOLOv5 Training and Inference Tool")
+        self.root.title("Advanced YOLOv5 Training and Inference Tool")
         self.root.geometry("1200x800")
 
         self.create_menu()
@@ -32,17 +34,24 @@ class YOLOv5Tool:
         self.val_dir = self.data_dir / 'val'
         self.inference_dir = Path('./inference_images')
         self.output_dir = Path('./output')
+        self.model_dir = Path('./models')
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.train_dir.mkdir(parents=True, exist_ok=True)
         self.val_dir.mkdir(parents=True, exist_ok=True)
         self.inference_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+
+        self.yolo_config = 'yolov5s.yaml'  # Default configuration
+        self.confidence_threshold = 0.25  # Default confidence threshold for inference
+        self.iou_threshold = 0.45  # Default IoU threshold for inference
 
     def create_menu(self):
         menubar = tk.Menu(self.root)
         filemenu = tk.Menu(menubar, tearoff=0)
         filemenu.add_command(label="Load Images", command=self.load_images)
         filemenu.add_command(label="Load Inference Images", command=self.load_inference_images)
+        filemenu.add_command(label="Import Annotations", command=self.import_annotations)
         filemenu.add_separator()
         filemenu.add_command(label="Exit", command=self.root.quit)
         menubar.add_cascade(label="File", menu=filemenu)
@@ -54,17 +63,24 @@ class YOLOv5Tool:
         menubar.add_cascade(label="Export", menu=exportmenu)
 
         trainmenu = tk.Menu(menubar, tearoff=0)
+        trainmenu.add_command(label="Select YOLO Model", command=self.select_yolo_model)
         trainmenu.add_command(label="Train YOLO Model", command=self.train_yolo)
         trainmenu.add_command(label="Validate YOLO Model", command=self.validate_yolo)
+        trainmenu.add_command(label="Load Model", command=self.load_model)
         menubar.add_cascade(label="Train/Validate", menu=trainmenu)
 
         inferencemenu = tk.Menu(menubar, tearoff=0)
         inferencemenu.add_command(label="Run Inference", command=self.run_inference)
+        inferencemenu.add_command(label="Advanced Inference Options", command=self.advanced_inference_options)
         menubar.add_cascade(label="Inference", menu=inferencemenu)
 
         exportonnxmenu = tk.Menu(menubar, tearoff=0)
         exportonnxmenu.add_command(label="Export to ONNX", command=self.export_onnx)
         menubar.add_cascade(label="Export ONNX", menu=exportonnxmenu)
+
+        helpmenu = tk.Menu(menubar, tearoff=0)
+        helpmenu.add_command(label="How to Use", command=self.show_help)
+        menubar.add_cascade(label="Help", menu=helpmenu)
 
         self.root.config(menu=menubar)
 
@@ -102,6 +118,9 @@ class YOLOv5Tool:
         self.export_onnx_button = ttk.Button(self.sidebar, text="Export to ONNX", command=self.export_onnx)
         self.export_onnx_button.pack(fill=tk.X, pady=5)
 
+        self.progress = ttk.Progressbar(self.sidebar, mode='determinate')
+        self.progress.pack(fill=tk.X, pady=5)
+
         self.status = tk.StringVar()
         self.status.set("Welcome to YOLOv5 Training and Inference Tool")
         self.statusbar = ttk.Label(self.root, textvariable=self.status, relief=tk.SUNKEN, anchor=tk.W)
@@ -122,13 +141,27 @@ class YOLOv5Tool:
         self.log_box.config(state='disabled')
         self.log_box.see(tk.END)
 
+    def show_help(self):
+        help_text = (
+            "YOLOv5 Training and Inference Tool:\n\n"
+            "1. Load Images: Load images for annotation and model training.\n"
+            "2. Save Annotations: Save the bounding box annotations.\n"
+            "3. Export Annotations: Export annotations in Pascal VOC or COCO format.\n"
+            "4. Select YOLO Model: Choose a YOLO model configuration (e.g., yolov5s, yolov5m).\n"
+            "5. Train YOLO Model: Train the YOLO model with the annotated images.\n"
+            "6. Validate YOLO Model: Validate the model on a separate validation dataset.\n"
+            "7. Run Inference: Perform inference on new images.\n"
+            "8. Export to ONNX: Export the trained model to ONNX format.\n"
+        )
+        messagebox.showinfo("How to Use", help_text)
+
     def load_images(self):
         try:
             file_paths = filedialog.askopenfilenames(filetypes=[("Image files", "*.jpg;*.jpeg;*.png")])
             if file_paths:
                 self.image_paths = list(file_paths)
                 self.image_index = 0
-                self.display_image(self.image_paths[self.image_index])
+                self.preprocess_and_display_image(self.image_paths[self.image_index])
                 self.status.set("Loaded image: " + os.path.basename(self.image_paths[self.image_index]))
                 self.log("Loaded image: " + os.path.basename(self.image_paths[self.image_index]))
         except Exception as e:
@@ -146,15 +179,183 @@ class YOLOv5Tool:
             self.log(f"Error loading inference images: {e}")
             messagebox.showerror("Error", f"Error loading inference images: {e}")
 
-    def display_image(self, file_path):
+    def import_annotations(self):
         try:
-            self.img = Image.open(file_path)
+            annotation_file = filedialog.askopenfilename(filetypes=[("Annotation files", "*.txt;*.xml;*.json")])
+            if annotation_file:
+                self.load_annotations(annotation_file)
+                self.log(f"Imported annotations from {annotation_file}.")
+                self.status.set(f"Imported annotations from {annotation_file}.")
+        except Exception as e:
+            self.log(f"Error importing annotations: {e}")
+            messagebox.showerror("Error", f"Error importing annotations: {e}")
+
+    def preprocess_image(self, image_path):
+        # Load image
+        img = Image.open(image_path)
+    
+        # Ensure image is in RGB mode
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+    
+        # Convert PIL image to OpenCV format for advanced preprocessing
+        img_cv = np.array(img)
+        img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
+    
+        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) in LAB color space
+        lab = cv2.cvtColor(img_cv, cv2.COLOR_BGR2LAB)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+        img_cv = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    
+        # Resize image while maintaining aspect ratio, with padding if necessary
+        desired_size = 640
+        old_size = img_cv.shape[:2]  # old_size is in (height, width) format
+    
+        ratio = float(desired_size) / max(old_size)
+        new_size = tuple([int(x * ratio) for x in old_size])
+    
+        img_cv = cv2.resize(img_cv, (new_size[1], new_size[0]), interpolation=cv2.INTER_AREA)
+    
+        delta_w = desired_size - new_size[1]
+        delta_h = desired_size - new_size[0]
+        top, bottom = delta_h // 2, delta_h - (delta_h // 2)
+        left, right = delta_w // 2, delta_w - (delta_w // 2)
+    
+        color = [128, 128, 128]
+        img_cv = cv2.copyMakeBorder(img_cv, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+    
+        # Mosaic Augmentation (advanced, optional)
+        if np.random.rand() > 0.5:
+            img_cv = self.mosaic_augmentation(img_cv)
+    
+        # Random Cutout (data augmentation)
+        if np.random.rand() > 0.5:
+            img_cv = self.cutout_augmentation(img_cv)
+    
+        # Random flipping (data augmentation)
+        if np.random.rand() > 0.5:
+            img_cv = cv2.flip(img_cv, 1)  # Horizontal flip
+    
+        # Random rotation (data augmentation)
+        if np.random.rand() > 0.5:
+            angle = np.random.uniform(-15, 15)
+            M = cv2.getRotationMatrix2D((desired_size / 2, desired_size / 2), angle, 1)
+            img_cv = cv2.warpAffine(img_cv, M, (desired_size, desired_size), borderValue=color)
+    
+        # AutoAugment/RandAugment (optional, dynamic data augmentation)
+        if np.random.rand() > 0.5:
+            img_cv = self.apply_autoaugment(img_cv)
+    
+        # Random brightness and contrast adjustment (data augmentation)
+        if np.random.rand() > 0.5:
+            alpha = np.random.uniform(0.8, 1.2)  # Contrast control
+            beta = np.random.uniform(-10, 10)    # Brightness control
+            img_cv = cv2.convertScaleAbs(img_cv, alpha=alpha, beta=beta)
+    
+        # Random Gaussian blur (optional, data augmentation)
+        if np.random.rand() > 0.5:
+            ksize = np.random.choice([3, 5])  # Kernel size
+            img_cv = cv2.GaussianBlur(img_cv, (ksize, ksize), 0)
+    
+        # Ensure pixel values are within [0, 255]
+        img_cv = np.clip(img_cv, 0, 255).astype(np.uint8)
+    
+        # Convert back to PIL Image for compatibility with GUI
+        img = Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB))
+    
+        return img
+    
+    def mosaic_augmentation(self, img, dataset=None):
+        try:
+            # If no dataset is provided, create one with the current image duplicated
+            if dataset is None:
+                dataset = [img] * 4  # Create a list of 4 copies of the image
+            
+            # Rest of the mosaic augmentation code...
+            h, w = img.shape[:2]
+            target_size = (w, h)
+    
+            # Randomly select 3 additional images from the dataset
+            imgs = [img] + random.sample(dataset, 3)
+            
+            # Resize all images to the target size
+            imgs_resized = [cv2.resize(i, target_size, interpolation=cv2.INTER_LINEAR) for i in imgs]
+    
+            # Combine images into a mosaic
+            top = np.hstack((imgs_resized[0], imgs_resized[1]))
+            bottom = np.hstack((imgs_resized[2], imgs_resized[3]))
+            mosaic_img = np.vstack((top, bottom))
+    
+            # Final resize to fit the desired output size
+            mosaic_img = cv2.resize(mosaic_img, (w, h))
+    
+            return mosaic_img
+        except Exception as e:
+            print(f"Error in mosaic_augmentation: {e}")
+            return img  # Return the original image if there's an error
+
+    
+            return mosaic_img
+        except Exception as e:
+            print(f"Error in mosaic_augmentation: {e}")
+            return img  # Return the original image if there's an error
+    
+    def cutout_augmentation(self, img):
+        try:
+            h, w, _ = img.shape
+    
+            # Apply multiple random cutouts
+            for _ in range(np.random.randint(1, 5)):  # Apply 1 to 5 cutouts
+                mask_size = np.random.randint(h // 8, h // 4)  # Mask size between 1/8th and 1/4th of the image height
+                mask_x = np.random.randint(0, w)
+                mask_y = np.random.randint(0, h)
+    
+                x1 = max(0, mask_x - mask_size // 2)
+                y1 = max(0, mask_y - mask_size // 2)
+                x2 = min(w, mask_x + mask_size // 2)
+                y2 = min(h, mask_y + mask_size // 2)
+    
+                img[y1:y2, x1:x2] = np.random.randint(0, 255, (y2-y1, x2-x1, 3))  # Fill with random colors
+    
+            return img
+        except Exception as e:
+            print(f"Error in cutout_augmentation: {e}")
+            return img  # Return the original image if there's an error
+    
+    def apply_autoaugment(self, img):
+        try:
+            augmentations = [
+                lambda x: cv2.flip(x, 1),  # Horizontal flip
+                lambda x: cv2.GaussianBlur(x, (3, 3), 0),  # Gaussian blur
+                lambda x: cv2.cvtColor(cv2.cvtColor(x, cv2.COLOR_BGR2HSV), cv2.COLOR_HSV2BGR),  # HSV shift
+                lambda x: cv2.addWeighted(x, 4, cv2.GaussianBlur(x, (0, 0), 10), -4, 128),  # Unsharp masking
+                lambda x: cv2.add(x, np.random.uniform(-10, 10, x.shape)),  # Random brightness
+                lambda x: cv2.rotate(x, cv2.ROTATE_90_CLOCKWISE),  # Rotate 90 degrees
+            ]
+    
+            # Apply a random number of augmentations (1-3)
+            for aug in random.sample(augmentations, k=random.randint(1, 3)):
+                img = aug(img)
+    
+            # Ensure pixel values are within [0, 255]
+            img = np.clip(img, 0, 255).astype(np.uint8)
+    
+            return img
+        except Exception as e:
+            print(f"Error in apply_autoaugment: {e}")
+            return img  # Return the original image if there's an error
+
+
+
+    def preprocess_and_display_image(self, file_path):
+        try:
+            self.img = self.preprocess_image(file_path)
             self.scale_factor = min(self.canvas.winfo_width() / self.img.width, self.canvas.winfo_height() / self.img.height)
             self.img_resized = self.img.resize((int(self.img.width * self.scale_factor), int(self.img.height * self.scale_factor)), Image.LANCZOS)
             self.img_tk = ImageTk.PhotoImage(self.img_resized)
             self.canvas.create_image(0, 0, anchor=tk.NW, image=self.img_tk)
             self.file_path = Path(file_path)
-            self.load_annotations()
         except Exception as e:
             self.log(f"Error displaying image: {e}")
             messagebox.showerror("Error", f"Error displaying image: {e}")
@@ -241,19 +442,26 @@ class YOLOv5Tool:
             self.log(f"Error saving annotations to file: {e}")
             messagebox.showerror("Error", f"Error saving annotations to file: {e}")
 
-    def load_annotations(self):
+    def load_annotations(self, annotation_file=None):
         self.annotations = []
-        annotation_file = self.file_path.with_suffix('.txt')
-        if annotation_file.exists():
-            with open(annotation_file, "r") as f:
-                for line in f.readlines():
-                    label_id, x_center, y_center, width, height = line.strip().split()
-                    x_center, y_center, width, height = map(float, (x_center, y_center, width, height))
-                    bbox = (x_center * self.img.width - width * self.img.width / 2,
-                            y_center * self.img.height - height * self.img.height / 2,
-                            x_center * self.img.width + width * self.img.width / 2,
-                            y_center * self.img.height + height * self.img.height / 2)
-                    self.annotations.append((label_id, bbox))
+        if annotation_file:
+            ext = Path(annotation_file).suffix
+            if ext == ".txt":
+                with open(annotation_file, "r") as f:
+                    for line in f.readlines():
+                        label_id, x_center, y_center, width, height = line.strip().split()
+                        x_center, y_center, width, height = map(float, (x_center, y_center, width, height))
+                        bbox = (x_center * self.img.width - width * self.img.width / 2,
+                                y_center * self.img.height - height * self.img.height / 2,
+                                x_center * self.img.width + width * self.img.width / 2,
+                                y_center * self.img.height + height * self.img.height / 2)
+                        self.annotations.append((label_id, bbox))
+            elif ext == ".xml":
+                # Add XML parsing code here (Pascal VOC format)
+                pass
+            elif ext == ".json":
+                # Add JSON parsing code here (COCO format)
+                pass
             self.update_image()
             self.log("Annotations loaded.")
 
@@ -328,6 +536,14 @@ class YOLOv5Tool:
             self.log(f"Error exporting as COCO: {e}")
             messagebox.showerror("Error", f"Error exporting as COCO: {e}")
 
+    def select_yolo_model(self):
+        model_choices = ["yolov5s.yaml", "yolov5m.yaml", "yolov5l.yaml", "yolov5x.yaml"]
+        self.yolo_config = simpledialog.askstring("Select YOLO Model", f"Choose YOLO model:\n{model_choices}",
+                                                  initialvalue=self.yolo_config)
+        if self.yolo_config not in model_choices:
+            self.yolo_config = "yolov5s.yaml"  # Default to yolov5s if an invalid choice is made
+        self.log(f"Selected YOLO model: {self.yolo_config}")
+
     def train_yolo(self):
         try:
             epochs = simpledialog.askinteger("Input", "Enter number of epochs:")
@@ -349,6 +565,7 @@ class YOLOv5Tool:
 
             self.status.set("Training started.")
             self.log("Training started.")
+            self.progress.start()
 
             # Run training in a separate thread to keep the GUI responsive
             threading.Thread(target=self.run_training, args=(epochs, batch_size)).start()
@@ -399,35 +616,52 @@ class YOLOv5Tool:
             command = [
                 "python", "train.py",
                 "--data", str(self.data_dir / 'data.yaml'),
-                "--cfg", "yolov5s.yaml",  # You can specify other YOLOv5 models here (e.g., yolov5m.yaml, yolov5l.yaml)
+                "--cfg", self.yolo_config,  # Selected YOLO model configuration
                 "--epochs", str(epochs),
                 "--batch-size", str(batch_size),
-                "--name", "custom_yolov5"  # Name of the training run
+                "--name", "custom_yolov5",  # Name of the training run
+                "--project", str(self.model_dir)  # Save the model in the models directory
             ]
             subprocess.run(command, check=True)
             self.status.set("Training completed.")
             self.log("Training completed.")
+            self.progress.stop()
         except subprocess.CalledProcessError as e:
             self.log(f"Error during training: {e}")
             messagebox.showerror("Error", f"Error during training: {e}")
+            self.progress.stop()
 
     def validate_yolo(self):
         try:
             # Validate YOLO model
             command = [
                 "python", "val.py",
-                "--weights", "runs/train/custom_yolov5/weights/best.pt",  # Path to the best model weights
+                "--weights", str(self.model_dir / "custom_yolov5/weights/best.pt"),  # Path to the best model weights
                 "--data", str(self.data_dir / 'data.yaml'),
                 "--img", "640"  # Image size
             ]
             self.status.set("Validation started.")
             self.log("Validation started.")
+            self.progress.start()
             subprocess.run(command, check=True)
             self.status.set("Validation completed.")
             self.log("Validation completed.")
+            self.progress.stop()
         except subprocess.CalledProcessError as e:
             self.log(f"Error during validation: {e}")
             messagebox.showerror("Error", f"Error during validation: {e}")
+            self.progress.stop()
+
+    def load_model(self):
+        try:
+            model_path = filedialog.askopenfilename(filetypes=[("YOLO model files", "*.pt")])
+            if model_path:
+                self.selected_model_path = model_path
+                self.log(f"Loaded model from {model_path}")
+                self.status.set(f"Loaded model from {model_path}")
+        except Exception as e:
+            self.log(f"Error loading model: {e}")
+            messagebox.showerror("Error", f"Error loading model: {e}")
 
     def run_inference(self):
         try:
@@ -435,12 +669,16 @@ class YOLOv5Tool:
                 messagebox.showwarning("No Images", "Please load images for inference.")
                 return
 
+            if not hasattr(self, 'selected_model_path'):
+                self.selected_model_path = str(self.model_dir / "custom_yolov5/weights/best.pt")
+
             # Inference command
             command = [
                 "python", "detect.py",
-                "--weights", "runs/train/custom_yolov5/weights/best.pt",  # Path to the best model weights
+                "--weights", self.selected_model_path,  # Path to the selected model weights
                 "--source", str(self.inference_dir),  # Directory with images for inference
-                "--conf", "0.25",  # Confidence threshold
+                "--conf", str(self.confidence_threshold),  # Confidence threshold
+                "--iou", str(self.iou_threshold),  # IoU threshold
                 "--img", "640",  # Image size
                 "--save-txt", "--save-conf",  # Save results to text files and include confidence scores
                 "--project", str(self.output_dir)  # Save results in the output directory
@@ -452,19 +690,33 @@ class YOLOv5Tool:
 
             self.status.set("Inference started.")
             self.log("Inference started.")
+            self.progress.start()
             subprocess.run(command, check=True)
             self.status.set("Inference completed. Check the output directory for results.")
             self.log("Inference completed. Check the output directory for results.")
+            self.progress.stop()
         except subprocess.CalledProcessError as e:
             self.log(f"Error during inference: {e}")
             messagebox.showerror("Error", f"Error during inference: {e}")
+            self.progress.stop()
+
+    def advanced_inference_options(self):
+        try:
+            self.confidence_threshold = simpledialog.askfloat("Confidence Threshold", "Enter confidence threshold:",
+                                                              initialvalue=self.confidence_threshold)
+            self.iou_threshold = simpledialog.askfloat("IoU Threshold", "Enter IoU threshold:",
+                                                       initialvalue=self.iou_threshold)
+            self.log(f"Set confidence threshold to {self.confidence_threshold} and IoU threshold to {self.iou_threshold}")
+        except Exception as e:
+            self.log(f"Error setting advanced inference options: {e}")
+            messagebox.showerror("Error", f"Error setting advanced inference options: {e}")
 
     def export_onnx(self):
         try:
             # ONNX export command
             command = [
                 "python", "export.py",
-                "--weights", "runs/train/custom_yolov5/weights/best.pt",  # Path to the best model weights
+                "--weights", str(self.model_dir / "custom_yolov5/weights/best.pt"),  # Path to the best model weights
                 "--img", "640",  # Image size
                 "--batch", "1",  # Batch size
                 "--device", "cpu",  # Exporting on CPU
@@ -498,7 +750,6 @@ class YOLOv5Tool:
             new_bbox = (bbox[0], bbox[1], bbox[2] + dx, bbox[3] + dy)
             self.annotations[self.selected_bbox] = (label_id, new_bbox)
             self.update_image()
-
 
 if __name__ == "__main__":
     root = tk.Tk()
