@@ -12,6 +12,7 @@ from shutil import copy
 from pathlib import Path
 import numpy as np
 import random
+from tqdm import tqdm  # For progress bar
 
 class YOLOv5Tool:
     def __init__(self, root):
@@ -346,19 +347,56 @@ class YOLOv5Tool:
             print(f"Error in apply_autoaugment: {e}")
             return img  # Return the original image if there's an error
 
-
-
     def preprocess_and_display_image(self, file_path):
         try:
+            # Log the start of the process
+            self.log(f"Starting image preprocessing for: {file_path}")
+    
+            # Preprocess the image
             self.img = self.preprocess_image(file_path)
-            self.scale_factor = min(self.canvas.winfo_width() / self.img.width, self.canvas.winfo_height() / self.img.height)
-            self.img_resized = self.img.resize((int(self.img.width * self.scale_factor), int(self.img.height * self.scale_factor)), Image.LANCZOS)
-            self.img_tk = ImageTk.PhotoImage(self.img_resized)
+    
+            # Get the target display size while maintaining aspect ratio
+            display_width = self.canvas.winfo_width()
+            display_height = self.canvas.winfo_height()
+    
+            # Calculate the scale factor while maintaining aspect ratio
+            scale_factor = min(display_width / self.img.width, display_height / self.img.height)
+    
+            # Resize the image with proper resampling method for high quality
+            new_width = int(self.img.width * scale_factor)
+            new_height = int(self.img.height * scale_factor)
+            self.img_resized = self.img.resize((new_width, new_height), Image.LANCZOS)
+    
+            # Check if padding is needed to maintain aspect ratio and center the image
+            pad_x = (display_width - new_width) // 2
+            pad_y = (display_height - new_height) // 2
+    
+            # Create a blank image with padding if necessary
+            img_padded = Image.new('RGB', (display_width, display_height), (128, 128, 128))
+            img_padded.paste(self.img_resized, (pad_x, pad_y))
+    
+            # Convert to Tkinter-compatible format
+            self.img_tk = ImageTk.PhotoImage(img_padded)
+    
+            # Display the image on the canvas
             self.canvas.create_image(0, 0, anchor=tk.NW, image=self.img_tk)
+    
+            # Store the file path for future reference
             self.file_path = Path(file_path)
+    
+            # Log successful processing
+            self.log(f"Image successfully preprocessed and displayed: {file_path}")
+    
+        except FileNotFoundError:
+            self.log(f"File not found: {file_path}")
+            messagebox.showerror("Error", f"File not found: {file_path}")
+        except IOError:
+            self.log(f"IO error while processing the file: {file_path}")
+            messagebox.showerror("Error", f"IO error while processing the file: {file_path}")
         except Exception as e:
-            self.log(f"Error displaying image: {e}")
-            messagebox.showerror("Error", f"Error displaying image: {e}")
+            self.log(f"Unexpected error displaying image: {str(e)}")
+            messagebox.showerror("Error", f"Unexpected error displaying image: {str(e)}")
+
 
     def on_click(self, event):
         self.start_x, self.start_y = event.x, event.y
@@ -397,9 +435,11 @@ class YOLOv5Tool:
         for line in self.axis_lines:
             self.canvas.delete(line)
         self.axis_lines = [
-            self.canvas.create_line(event.x, 0, event.x, self.canvas.winfo_height(), fill='gray', dash=(2, 2)),
-            self.canvas.create_line(0, event.y, self.canvas.winfo_width(), event.y, fill='gray', dash=(2, 2))
+            self.canvas.create_line(event.x, 0, event.x, self.canvas.winfo_height(), fill='#006400', dash=(2, 2)),  # Deep green color
+            self.canvas.create_line(0, event.y, self.canvas.winfo_width(), event.y, fill='#006400', dash=(2, 2))   # Deep green color
         ]
+
+    
 
     def save_annotation(self):
         try:
@@ -577,38 +617,53 @@ class YOLOv5Tool:
         try:
             train_folder = self.train_dir
             val_folder = self.val_dir
-
+    
             # Clear train and val folders if they already exist
             for folder in [train_folder, val_folder]:
                 if folder.exists():
                     for file in folder.iterdir():
                         file.unlink()
-
-            # Split images and annotations into train and val sets (80% train, 20% val)
-            image_files = list(self.data_dir.glob('*.jpg'))
+    
+            # Support multiple image formats
+            image_files = list(self.data_dir.glob('*.jpg')) + \
+                          list(self.data_dir.glob('*.jpeg')) + \
+                          list(self.data_dir.glob('*.png'))
             annotation_files = list(self.data_dir.glob('*.txt'))
-            image_files.sort()
-            annotation_files.sort()
-
-            split_index = int(0.8 * len(image_files))
-            train_images = image_files[:split_index]
-            val_images = image_files[split_index:]
-            train_annotations = annotation_files[:split_index]
-            val_annotations = annotation_files[split_index:]
-
-            # Copy images and annotations to respective folders
-            for image, annotation in zip(train_images, train_annotations):
-                copy(image, train_folder / image.name)
-                copy(annotation, train_folder / annotation.name)
-
-            for image, annotation in zip(val_images, val_annotations):
-                copy(image, val_folder / image.name)
-                copy(annotation, val_folder / annotation.name)
-
-            self.log(f"Dataset prepared: {len(train_images)} train images, {len(val_images)} val images")
+    
+            # Ensure images and annotations are paired correctly
+            paired_files = [(img, img.with_suffix('.txt')) for img in image_files if img.with_suffix('.txt') in annotation_files]
+    
+            if not paired_files:
+                raise ValueError("No matching image-annotation pairs found in the dataset.")
+    
+            # Shuffle the paired files before splitting
+            random.shuffle(paired_files)
+    
+            # Split images and annotations into train and val sets (80% train, 20% val)
+            split_index = int(0.8 * len(paired_files))
+            train_pairs = paired_files[:split_index]
+            val_pairs = paired_files[split_index:]
+    
+            # Copy images and annotations to respective folders with progress bar
+            self.log("Copying training data...")
+            for image, annotation in tqdm(train_pairs, desc="Training data"):
+                shutil.copy(image, train_folder / image.name)
+                shutil.copy(annotation, train_folder / annotation.name)
+    
+            self.log("Copying validation data...")
+            for image, annotation in tqdm(val_pairs, desc="Validation data"):
+                shutil.copy(image, val_folder / image.name)
+                shutil.copy(annotation, val_folder / annotation.name)
+    
+            self.log(f"Dataset prepared: {len(train_pairs)} train images, {len(val_pairs)} val images")
+    
+        except ValueError as ve:
+            self.log(f"Dataset preparation error: {ve}")
+            messagebox.showerror("Error", f"Dataset preparation error: {ve}")
         except Exception as e:
             self.log(f"Error preparing dataset: {e}")
             messagebox.showerror("Error", f"Error preparing dataset: {e}")
+
 
     def run_training(self, epochs, batch_size):
         try:
